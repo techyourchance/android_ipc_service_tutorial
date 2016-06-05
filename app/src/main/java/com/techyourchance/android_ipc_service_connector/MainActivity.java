@@ -115,25 +115,45 @@ public class MainActivity extends AppCompatActivity {
             }
         };
 
+        private String mCurrentDate = "-";
+        private boolean mConnectionFailure = false;
+
         private final Handler mMainHandler = new Handler(Looper.getMainLooper());
 
         private Thread mWorkerThread;
-        private String mCurrentDate = "-";
+        private Thread mOldWorkerThread;
 
         public void start() {
 
-            // make sure we don't loose reference to a live thread
+            // make sure we stop the worker thread, but keep reference to it
             if (mWorkerThread != null) {
+                mOldWorkerThread = mWorkerThread;
                 stop();
             }
 
             mWorkerThread = new Thread(new Runnable() {
                 @Override
                 public void run() {
+
+                    // make this thread wait until the old thread dies
+                    if (mOldWorkerThread != null) {
+                        try {
+                            mOldWorkerThread.join();
+                        } catch (InterruptedException e) {
+                            // set the interrupted status back (it was cleared in join())
+                            Thread.currentThread().interrupt();
+                        }
+                        mOldWorkerThread = null;
+                    }
+
+                    mConnectionFailure = false;
+                    mCurrentDate = "-";
+
                     // loop until interrupted
                     while (!Thread.currentThread().isInterrupted()) {
 
                         updateDate();
+
                         try {
                             Thread.sleep(DATE_REFRESH_INTERVAL);
                         } catch (InterruptedException e) {
@@ -161,12 +181,15 @@ public class MainActivity extends AppCompatActivity {
              therefore we show informative notification.
              The notification should be cancelled if the service is connected
              */
-            mMainHandler.postDelayed(mConnectionInProgressNotification, 100);
+            if (!mConnectionFailure) {
+                mMainHandler.postDelayed(mConnectionInProgressNotification, 100);
+            }
 
             // this call can block the worker thread for up to CONNECTION_TIMEOUT milliseconds
             if (mIpcServiceConnector.waitForState(IpcServiceConnector.STATE_BOUND_CONNECTED,
                     CONNECTION_TIMEOUT)) { // IPC service connected
 
+                mConnectionFailure = false;
                 mMainHandler.removeCallbacks(mConnectionInProgressNotification);
 
                 try {
@@ -186,6 +209,7 @@ public class MainActivity extends AppCompatActivity {
                  running, and if the service will reconnect in the future, DateMonitor will continue
                  to function properly
                   */
+                mConnectionFailure = true;
                 mMainHandler.post(mConnectionFailedNotification);
                 return;
             }
