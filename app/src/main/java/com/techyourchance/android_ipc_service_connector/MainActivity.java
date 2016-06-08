@@ -12,7 +12,10 @@ import android.os.RemoteException;
 import android.support.annotation.WorkerThread;
 import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
+import android.view.View;
+import android.widget.Button;
 import android.widget.TextView;
+import android.widget.Toast;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -28,11 +31,13 @@ public class MainActivity extends AppCompatActivity {
         public void onServiceConnected(ComponentName name, IBinder service) {
             Log.d(TAG, "onServiceConnected()");
             mDateProvider = IDateProvider.Stub.asInterface(service);
+            mBtnCrashService.setEnabled(true);
         }
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
             Log.d(TAG, "onServiceDisconnected()");
+            mBtnCrashService.setEnabled(false);
             mDateProvider = null;
         }
     };
@@ -43,23 +48,35 @@ public class MainActivity extends AppCompatActivity {
     private final DateMonitor mDateMonitor = new DateMonitor();
 
     private TextView mTxtDate;
+    private Button mBtnCrashService;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
         mIpcServiceConnector = new IpcServiceConnector(this, "DateProviderConnector");
+
         mTxtDate = (TextView) findViewById(R.id.txt_date);
+        mBtnCrashService = (Button) findViewById(R.id.btn_crash_service);
+
+        mBtnCrashService.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                try {
+                    mDateProvider.crashService();
+                } catch (RemoteException e) {
+                    e.printStackTrace();
+                }
+            }
+        });
     }
 
     @Override
     protected void onStart() {
         super.onStart();
         Log.d(TAG, "onStart(); binding and connecting to IPC service");
-        if (!mIpcServiceConnector.bindAndConnectToIpcService(
-                new Intent(this, DateProviderService.class),
-                mServiceConnection,
-                Context.BIND_AUTO_CREATE)) {
+        if (!bindDateProviderService()) {
             // service couldn't be bound - handle this error by disabling the logic which depends
             // on this service (in this case we will do it in onResume())
         }
@@ -90,6 +107,13 @@ public class MainActivity extends AppCompatActivity {
         mDateMonitor.stop();
     }
 
+    private boolean bindDateProviderService() {
+        return mIpcServiceConnector.bindAndConnectToIpcService(
+                new Intent(this, DateProviderService.class),
+                mServiceConnection,
+                Context.BIND_AUTO_CREATE);
+    }
+
 
     private class DateMonitor {
 
@@ -98,13 +122,6 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void run() {
                 mTxtDate.setText("connecting to IPC service...");
-            }
-        };
-
-        private final Runnable mConnectionFailedNotification = new Runnable() {
-            @Override
-            public void run() {
-                mTxtDate.setText("couldn't connect to IPC service");
             }
         };
 
@@ -199,22 +216,52 @@ public class MainActivity extends AppCompatActivity {
                     // notified us yet)
                     mCurrentDate = "-";
                     e.printStackTrace();
+                } catch (NullPointerException e) {
+                    /*
+                     Since mDateProvider is assigned/cleared on UI thread, but is being used on
+                     worker thread, there is a chance of race condition that will result in NPE.
+                     We could either add synchronization, or catch NPE - I chose the latter in
+                     order to simplify the (already complex) example
+                     */
+                    mCurrentDate = "-";
+                    e.printStackTrace();
                 }
             } else { // could not connect to IPC service
+                Log.e(TAG, "connection attempt timed out - attempting to rebind to the service");
+                notifyUserConnectionAttemptFailed();
+
                 /*
-                 Connection error handling here. I just show error string and proceed, but a real
-                 error handling could include e.g. service rebind attempt, some extrapolating of
-                 cached data, etc.
-                 Note that in this case this "error" state might be temporary - worker thread keeps
-                 running, and if the service will reconnect in the future, DateMonitor will continue
-                 to function properly
+                 Connection error handling here. I just attempt to rebind to the service, but a real
+                 error handling could also employ some extrapolation of cached data, etc.
+                 If this is a fatal error from your application's point ov view, then unbind from
+                 the service and stop the worker thread.
                   */
+
                 mConnectionFailure = true;
-                mMainHandler.post(mConnectionFailedNotification);
+
+                mIpcServiceConnector.unbindIpcService();
+                if (!bindDateProviderService()) {
+                    Log.e(TAG, "rebind attempt failed - stopping DateMonitor completely");
+                    DateMonitor.this.stop();
+                }
+
                 return;
             }
 
             mMainHandler.post(mDateNotification);
+        }
+
+        private void notifyUserConnectionAttemptFailed() {
+            MainActivity.this.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    Toast.makeText(
+                            MainActivity.this,
+                            "connection attempt timed out - rebinding",
+                            Toast.LENGTH_LONG)
+                            .show();
+                }
+            });
         }
     }
 }

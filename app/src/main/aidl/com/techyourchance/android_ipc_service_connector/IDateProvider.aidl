@@ -6,4 +6,9 @@ interface IDateProvider {
      * This method returns the current date in a human readable format
      */
     String getDate();
+
+    /**
+     * This method causes the service to crash
+     */
+    void crashService();
 }

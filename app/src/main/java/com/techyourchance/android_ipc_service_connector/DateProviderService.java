@@ -2,7 +2,9 @@ package com.techyourchance.android_ipc_service_connector;
 
 import android.app.Service;
 import android.content.Intent;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.RemoteException;
 import android.support.annotation.Nullable;
 import android.util.Log;
@@ -23,6 +25,11 @@ public class DateProviderService extends Service {
         @Override
         public String getDate() throws RemoteException {
             return DateProviderService.this.getDate();
+        }
+
+        @Override
+        public void crashService() throws RemoteException {
+            DateProviderService.this.crashService();
         }
     };
 
@@ -55,6 +62,17 @@ public class DateProviderService extends Service {
     public void onRebind(Intent intent) {
         Log.d(TAG, "onRebind()");
         super.onRebind(intent);
+    }
+
+    private void crashService() {
+        Handler mainHandler = new Handler(Looper.getMainLooper());
+        mainHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                Object object = null;
+                object.toString(); // this will cause NPE
+            }
+        });
     }
 
     private String getDate() {
